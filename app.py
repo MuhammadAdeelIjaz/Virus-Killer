@@ -15,12 +15,45 @@ from typing import Dict, Any, Optional, Tuple, List
 # ============================================================================
 
 st.set_page_config(
-    page_title="ThreatLens",
+    page_title="ThreatLens | Security Intelligence",
     page_icon="🛡️",
-    layout="centered"
+    layout="wide"
 )
 
+# Custom CSS for a sleek, modern look
+st.markdown("""
+    <style>
+        .main-header {
+            font-size: 42px;
+            font-weight: 700;
+            color: #1f77b4;
+            text-align: center;
+            margin-bottom: 10px;
+        }
+        .sub-header {
+            text-align: center;
+            color: #888;
+            margin-bottom: 30px;
+        }
+        div[data-testid="stMetricValue"] {
+            font-size: 1.2rem;
+        }
+        .stButton>button {
+            background-color: #1f77b4;
+            color: white;
+            font-weight: 600;
+            border-radius: 8px;
+            border: none;
+        }
+        .stButton>button:hover {
+            background-color: #145a86;
+            color: white;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
 def check_api_keys():
+    """Check if required API keys are available in secrets."""
     missing_keys = []
     if not hasattr(st, 'secrets') or not st.secrets:
         return ["STREAMLIT_SECRETS"]
@@ -176,7 +209,7 @@ def get_whois(target: str, target_type: str) -> Dict[str, Any]:
         
         result = {"source": "WHOIS", "status": "success", "data": {}, "error": None}
         
-        # HELPER TO CONVERT DATETIME OBJECTS TO STRINGS
+        # Convert datetime objects to strings
         def clean_date(val):
             if isinstance(val, list):
                 return [str(v) for v in val]
@@ -286,7 +319,6 @@ def get_google_safe_browsing(target: str, target_type: str) -> Dict[str, Any]:
         return {"source": "Google Safe Browsing", "status": "error", "data": {}, "error": str(e)}
 
 
-# UPDATED URLSCAN TO FIX THE MISMATCH
 def get_urlscan(target: str, target_type: str) -> Dict[str, Any]:
     api_key = st.secrets.get("URLSCAN_API_KEY")
     if target_type not in ["URL", "Domain"]:
@@ -300,7 +332,6 @@ def get_urlscan(target: str, target_type: str) -> Dict[str, Any]:
         if not domain:
             return {"source": "URLScan.io", "status": "error", "data": {}, "error": "Could not extract domain"}
 
-    # Use exact domain matching to avoid picking up unrelated scans
     search_url = f"https://urlscan.io/api/v1/search/?q=domain:{domain}&size=1"
     headers = {"API-Key": api_key}
 
@@ -315,7 +346,6 @@ def get_urlscan(target: str, target_type: str) -> Dict[str, Any]:
         if not results:
             return {"source": "URLScan.io", "status": "success", "data": {"scan_found": False, "message": "No prior scans found for this domain in URLScan.io."}, "error": None}
 
-        # Filter to ensure the exact domain matches the search
         valid_result = None
         for r in results:
             try:
@@ -335,7 +365,7 @@ def get_urlscan(target: str, target_type: str) -> Dict[str, Any]:
             "data": {
                 "scan_found": True,
                 "scan_url": latest.get("page", {}).get("url", "N/A"),
-                "screenshot_url": latest.get("task", {}).get("screenshotURL", "No screenshot available"),
+                "screenshot_url": latest.get("task", {}).get("screenshotURL", None),
                 "score": latest.get("stats", {}).get("score", 0),
                 "malicious": latest.get("stats", {}).get("malicious", 0),
                 "country": latest.get("page", {}).get("country", "N/A"),
@@ -362,7 +392,9 @@ SOURCES = {
 # ============================================================================
 
 def build_gemini_prompt(target: str, target_type: str, knowledge_level: str, source_results: List[Dict[str, Any]]) -> str:
-    source_data_str = json.dumps(source_results, indent=2)
+    # Filter out skipped sources so the AI doesn't waste time on them
+    active_results = [r for r in source_results if r.get("status") != "skipped"]
+    source_data_str = json.dumps(active_results, indent=2)
     
     base_instruction = """
     You are a security intelligence analyst. Analyze the provided security data and provide a clear assessment.
@@ -388,7 +420,6 @@ def build_gemini_prompt(target: str, target_type: str, knowledge_level: str, sou
         prompt = f"{base_instruction}\nProvide a concise technical assessment.\nTarget: {target}\nKnowledge Level: Expert\nSource Data:\n{source_data_str}"
     
     return prompt
-
 
 def analyze_with_gemini(target: str, target_type: str, knowledge_level: str, source_results: List[Dict[str, Any]]) -> Dict[str, Any]:
     api_key = st.secrets.get("GEMINI_API_KEY")
@@ -454,7 +485,13 @@ def display_source_results(source_results: List[Dict[str, Any]]):
             
             if status == "success":
                 with st.expander(f"✅ {source_name}", expanded=False):
-                    st.json(result.get("data", {}))
+                    data = result.get("data", {})
+                    
+                    # Special rendering for URLScan Screenshot
+                    if source_name == "URLScan.io" and data.get("screenshot_url"):
+                        st.image(data["screenshot_url"], caption="URLScan.io Screenshot", use_column_width=True)
+                    else:
+                        st.json(data)
             elif status == "skipped":
                 with st.expander(f"⏭️ {source_name}", expanded=False):
                     st.info(result.get("error", "Source skipped for this target type."))
@@ -484,26 +521,36 @@ def display_verdict_card(verdict_result: Dict[str, Any]):
     </div>
     """, unsafe_allow_html=True)
     
-    if key_findings:
-        st.markdown("### 📋 Key Findings")
-        for finding in key_findings:
-            st.markdown(f"- {finding}")
-    if risk_factors:
-        st.markdown("### ⚠️ Risk Factors")
-        for risk in risk_factors:
-            st.markdown(f"- {risk}")
-    if recommendations:
-        st.markdown("### 💡 Recommendations")
-        for rec in recommendations:
-            st.markdown(f"- {rec}")
+    tab1, tab2, tab3 = st.tabs(["📋 Key Findings", "⚠️ Risk Factors", "💡 Recommendations"])
+    
+    with tab1:
+        if key_findings:
+            for finding in key_findings:
+                st.markdown(f"- {finding}")
+        else:
+            st.info("No key findings provided.")
+    
+    with tab2:
+        if risk_factors:
+            for risk in risk_factors:
+                st.markdown(f"- {risk}")
+        else:
+            st.info("No risk factors identified.")
+    
+    with tab3:
+        if recommendations:
+            for rec in recommendations:
+                st.markdown(f"- {rec}")
+        else:
+            st.info("No recommendations provided.")
 
 # ============================================================================
 # 7. Main App
 # ============================================================================
 
 def main():
-    st.markdown("# 🛡️ ThreatLens")
-    st.markdown("*IP, Domain & URL Security Intelligence Analyzer*")
+    st.markdown('<div class="main-header">🛡️ ThreatLens</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">IP, Domain & URL Security Intelligence Analyzer</div>', unsafe_allow_html=True)
     
     missing_keys = check_api_keys()
     if missing_keys:
@@ -514,18 +561,20 @@ def main():
         st.info("📝 **How to fix:**\n\n1. Go to your app on Streamlit Cloud\n2. Click on Settings (⚙️)\n3. In the Secrets section, add:\n\n```toml\nVIRUSTOTAL_API_KEY = \"your_key_here\"\nGEMINI_API_KEY = \"your_key_here\"\nABUSEIPDB_API_KEY = \"your_key_here\"\nGOOGLE_SAFE_BROWSING_API_KEY = \"your_key_here\"\nURLSCAN_API_KEY = \"your_key_here\"\n```\n4. Click Save and redeploy your app")
         st.stop()
     
-    with st.form(key="analysis_form"):
-        col1, col2 = st.columns(2)
-        with col1:
-            target_type = st.selectbox("Target Type", options=["Domain", "IP Address", "URL"])
-        with col2:
-            knowledge_level = st.selectbox("Knowledge Level", options=["Beginner", "Intermediate", "Expert"])
-        
-        type_mapping = {"Domain": "Domain", "IP Address": "IP", "URL": "URL"}
-        internal_type = type_mapping[target_type]
-        
-        target = st.text_input("Target", placeholder=f"Enter {target_type.lower()}")
-        analyze_button = st.form_submit_button("🔍 Analyze", use_container_width=True)
+    with st.container(border=True):
+        st.markdown("### 🔎 New Analysis")
+        with st.form(key="analysis_form"):
+            col1, col2 = st.columns(2)
+            with col1:
+                target_type = st.selectbox("Target Type", options=["Domain", "IP Address", "URL"])
+            with col2:
+                knowledge_level = st.selectbox("Knowledge Level", options=["Beginner", "Intermediate", "Expert"])
+            
+            type_mapping = {"Domain": "Domain", "IP Address": "IP", "URL": "URL"}
+            internal_type = type_mapping[target_type]
+            
+            target = st.text_input("Target", placeholder=f"Enter {target_type.lower()}")
+            analyze_button = st.form_submit_button("🔍 Analyze", use_container_width=True)
         
     if analyze_button:
         if not target:
@@ -564,14 +613,23 @@ def main():
             with st.spinner("Generating AI assessment..."):
                 gemini_result = analyze_with_gemini(target, internal_type, knowledge_level, source_results)
             
-            col_left, col_right = st.columns([3, 1])
-            with col_left:
-                display_verdict_card(gemini_result)
-            with col_right:
-                st.metric("Target", target[:30] + "..." if len(target) > 30 else target)
-                st.metric("Type", target_type)
-                st.metric("Level", knowledge_level)
+            st.divider()
             
+            # Top metrics
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.metric("Target", target[:30] + "..." if len(target) > 30 else target)
+            with c2:
+                st.metric("Type", target_type)
+            with c3:
+                st.metric("Level", knowledge_level)
+
+            # Verdict card
+            display_verdict_card(gemini_result)
+            
+            st.divider()
+            
+            # Raw sources
             display_source_results(source_results)
             
             with st.expander("📊 Raw Data", expanded=False):
