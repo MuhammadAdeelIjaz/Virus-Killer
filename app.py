@@ -33,6 +33,13 @@ def check_api_keys():
         missing_keys.append("VIRUSTOTAL_API_KEY")
     if "GEMINI_API_KEY" not in st.secrets or not st.secrets["GEMINI_API_KEY"]:
         missing_keys.append("GEMINI_API_KEY")
+    if "ABUSEIPDB_API_KEY" not in st.secrets or not st.secrets["ABUSEIPDB_API_KEY"]:
+        missing_keys.append("ABUSEIPDB_API_KEY")
+    if "GOOGLE_SAFE_BROWSING_API_KEY" not in st.secrets or not st.secrets["GOOGLE_SAFE_BROWSING_API_KEY"]:
+        missing_keys.append("GOOGLE_SAFE_BROWSING_API_KEY")
+    if "URLSCAN_API_KEY" not in st.secrets or not st.secrets["URLSCAN_API_KEY"]:
+        missing_keys.append("URLSCAN_API_KEY")
+        
     return missing_keys
 
 # ============================================================================
@@ -316,16 +323,226 @@ def get_whois(target: str, target_type: str) -> Dict[str, Any]:
 
 
 # ============================================================================
+# 3.1 NEW SOURCES
+# ============================================================================
+
+def get_abuseipdb(target: str, target_type: str) -> Dict[str, Any]:
+    """Query AbuseIPDB for IP reputation."""
+    api_key = st.secrets.get("ABUSEIPDB_API_KEY")
+    if target_type != "IP":
+        return {
+            "source": "AbuseIPDB",
+            "status": "skipped",
+            "data": {},
+            "error": "AbuseIPDB is only applicable for IP addresses"
+        }
+    if not api_key:
+        return {
+            "source": "AbuseIPDB",
+            "status": "error",
+            "data": {},
+            "error": "AbuseIPDB API key not configured"
+        }
+
+    url = 'https://api.abuseipdb.com/api/v2/check'
+    querystring = {
+        'ipAddress': target,
+        'maxAgeInDays': '90'
+    }
+    headers = {
+        'Accept': 'application/json',
+        'Key': api_key
+    }
+
+    try:
+        response = requests.request(method='GET', url=url, headers=headers, params=querystring, timeout=30)
+        
+        if response.status_code == 429:
+            return {"source": "AbuseIPDB", "status": "error", "data": {}, "error": "Rate limit exceeded."}
+        if response.status_code != 200:
+            return {"source": "AbuseIPDB", "status": "error", "data": {}, "error": f"HTTP Error {response.status_code}"}
+
+        data = response.json().get('data', {})
+        result = {
+            "source": "AbuseIPDB",
+            "status": "success",
+            "data": {
+                "abuse_confidence_score": data.get('abuseConfidenceScore', 0),
+                "country": data.get('countryCode', "N/A"),
+                "usage_type": data.get('usageType', "N/A"),
+                "isp": data.get('isp', "N/A"),
+                "total_reports": data.get('totalReports', 0),
+                "num_distinct_users": data.get('numDistinctUsers', 0)
+            },
+            "error": None
+        }
+        return result
+        
+    except Exception as e:
+        return {"source": "AbuseIPDB", "status": "error", "data": {}, "error": str(e)}
+
+
+def get_google_safe_browsing(target: str, target_type: str) -> Dict[str, Any]:
+    """Query Google Safe Browsing for URL and Domain threats."""
+    api_key = st.secrets.get("GOOGLE_SAFE_BROWSING_API_KEY")
+    if target_type not in ["URL", "Domain"]:
+        return {
+            "source": "Google Safe Browsing",
+            "status": "skipped",
+            "data": {},
+            "error": "Google Safe Browsing is only applicable for URLs and Domains"
+        }
+    if not api_key:
+        return {
+            "source": "Google Safe Browsing",
+            "status": "error",
+            "data": {},
+            "error": "Google Safe Browsing API key not configured"
+        }
+
+    url = f"https://safebrowsing.googleapis.com/v4/threatMatches:find?key={api_key}"
+    
+    # If Domain provided, convert to URL format for the API
+    lookup_url = target
+    if target_type == "Domain" and not target.startswith(('http://', 'https://')):
+        lookup_url = f"http://{target}/"
+
+    payload = {
+        "client": {
+            "clientId": "ThreatLens",
+            "clientVersion": "1.0.0"
+        },
+        "threatInfo": {
+            "threatTypes": ["MALWARE", "SOCIAL_ENGINEERING", "UNWANTED_SOFTWARE", "POTENTIALLY_HARMFUL_APPLICATION"],
+            "platformTypes": ["ANY_PLATFORM"],
+            "threatEntryTypes": ["URL"],
+            "threatEntries": [
+                {"url": lookup_url}
+            ]
+        }
+    }
+
+    try:
+        response = requests.post(url, json=payload, timeout=30)
+        
+        if response.status_code != 200:
+            return {"source": "Google Safe Browsing", "status": "error", "data": {}, "error": f"HTTP Error {response.status_code}"}
+
+        data = response.json()
+        
+        if "matches" not in data:
+            # No threats found
+            return {
+                "source": "Google Safe Browsing",
+                "status": "success",
+                "data": {
+                    "threat_found": False,
+                    "message": "No threats found in Google Safe Browsing database."
+                },
+                "error": None
+            }
+        
+        # Threats found
+        threats = data["matches"]
+        threat_types = [t.get("threatType", "UNKNOWN") for t in threats]
+        
+        return {
+            "source": "Google Safe Browsing",
+            "status": "success",
+            "data": {
+                "threat_found": True,
+                "threat_types": threat_types,
+                "message": f"Threat detected! Types: {', '.join(threat_types)}"
+            },
+            "error": None
+        }
+        
+    except Exception as e:
+        return {"source": "Google Safe Browsing", "status": "error", "data": {}, "error": str(e)}
+
+
+def get_urlscan(target: str, target_type: str) -> Dict[str, Any]:
+    """Query URLScan.io for domain/URL scans and screenshots."""
+    api_key = st.secrets.get("URLSCAN_API_KEY")
+    if target_type not in ["URL", "Domain"]:
+        return {
+            "source": "URLScan.io",
+            "status": "skipped",
+            "data": {},
+            "error": "URLScan.io is only applicable for URLs and Domains"
+        }
+    if not api_key:
+        return {
+            "source": "URLScan.io",
+            "status": "error",
+            "data": {},
+            "error": "URLScan.io API key not configured"
+        }
+
+    domain = target
+    if target_type == "URL":
+        domain = extract_domain_from_url(target)
+        if not domain:
+            return {"source": "URLScan.io", "status": "error", "data": {}, "error": "Could not extract domain"}
+
+    # Search API for recent scans
+    search_url = f"https://urlscan.io/api/v1/search/?q=domain:{domain}&size=1"
+    headers = {"API-Key": api_key}
+
+    try:
+        response = requests.get(search_url, headers=headers, timeout=30)
+        if response.status_code != 200:
+            return {"source": "URLScan.io", "status": "error", "data": {}, "error": f"HTTP Error {response.status_code}"}
+
+        data = response.json()
+        results = data.get("results", [])
+        
+        if not results:
+            return {
+                "source": "URLScan.io",
+                "status": "success",
+                "data": {
+                    "scan_found": False,
+                    "message": "No prior scans found for this domain in URLScan.io."
+                },
+                "error": None
+            }
+
+        # Get the most recent scan
+        latest = results[0]
+        return {
+            "source": "URLScan.io",
+            "status": "success",
+            "data": {
+                "scan_found": True,
+                "scan_url": latest.get("page", {}).get("url", "N/A"),
+                "screenshot_url": latest.get("task", {}).get("screenshotURL", "No screenshot available"),
+                "score": latest.get("stats", {}).get("score", 0),
+                "malicious": latest.get("stats", {}).get("malicious", 0),
+                "country": latest.get("page", {}).get("country", "N/A"),
+                "server": latest.get("page", {}).get("server", "N/A")
+            },
+            "error": None
+        }
+        
+    except Exception as e:
+        return {"source": "URLScan.io", "status": "error", "data": {}, "error": str(e)}
+
+
+# ============================================================================
 # 4. SOURCES Registry
 # ============================================================================
 
 SOURCES = {
     "VirusTotal": get_virustotal,
+    "AbuseIPDB": get_abuseipdb,
+    "Google Safe Browsing": get_google_safe_browsing,
+    "URLScan.io": get_urlscan,
     "WHOIS": get_whois,
 }
 
 # ============================================================================
-# 5. Gemini Analysis - UPDATED FOR GEMINI 3.6
+# 5. Gemini Analysis
 # ============================================================================
 
 def build_gemini_prompt(target: str, target_type: str, knowledge_level: str, source_results: List[Dict[str, Any]]) -> str:
@@ -400,9 +617,7 @@ def build_gemini_prompt(target: str, target_type: str, knowledge_level: str, sou
 
 
 def analyze_with_gemini(target: str, target_type: str, knowledge_level: str, source_results: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """
-    Use Gemini to analyze the collected source data.
-    """
+    """Use Gemini to analyze the collected source data."""
     api_key = st.secrets.get("GEMINI_API_KEY")
     if not api_key:
         return {
@@ -415,42 +630,26 @@ def analyze_with_gemini(target: str, target_type: str, knowledge_level: str, sou
         }
     
     try:
-        # Configure Gemini
         genai.configure(api_key=api_key)
         
         # Directly use the working model confirmed via terminal
         model_name = "gemini-3.6-flash"
         
         try:
-            # Try initializing the model directly
             model = genai.GenerativeModel(model_name)
-            
-            # Optionally, test if it works immediately
-            # test_response = model.generate_content("Hello")
-            # if not test_response or not test_response.text:
-            #     raise Exception("Model returned empty response")
-            
         except Exception as e:
-            # Fallback error message if model initialization fails
             return {
                 "verdict": "UNKNOWN",
                 "confidence": "Low",
                 "summary": f"Could not initialize Gemini model {model_name}. Error: {str(e)[:200]}",
                 "key_findings": ["Model initialization failed"],
                 "risk_factors": [],
-                "recommendations": [
-                    "Check your Gemini API key is valid",
-                    "Ensure Gemini 3.6 Flash is available in your region",
-                    "Try again in a few minutes"
-                ]
+                "recommendations": ["Check your Gemini API key is valid"]
             }
         
-        # Build the prompt
         prompt = build_gemini_prompt(target, target_type, knowledge_level, source_results)
         
-        # Generate response with proper configuration
         try:
-            # Try with generation config
             response = model.generate_content(
                 prompt,
                 generation_config={
@@ -461,22 +660,18 @@ def analyze_with_gemini(target: str, target_type: str, knowledge_level: str, sou
                 }
             )
         except TypeError:
-            # If generation_config doesn't work as dict, try without it
             response = model.generate_content(prompt)
-        except Exception as e:
-            # Fallback to simple generation
+        except Exception:
             response = model.generate_content(prompt)
         
         response_text = response.text.strip()
         
-        # Try to parse JSON from response
         try:
             json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
             if json_match:
                 json_str = json_match.group()
                 result = json.loads(json_str)
                 
-                # Ensure all required fields exist
                 result.setdefault("verdict", "UNKNOWN")
                 result.setdefault("confidence", "Medium")
                 result.setdefault("summary", "Analysis completed")
@@ -489,75 +684,20 @@ def analyze_with_gemini(target: str, target_type: str, knowledge_level: str, sou
                 
                 return result
             else:
-                return {
-                    "verdict": "UNKNOWN",
-                    "confidence": "Low",
-                    "summary": "Could not parse Gemini response as JSON",
-                    "key_findings": ["Parsing error"],
-                    "risk_factors": [],
-                    "recommendations": ["Please try again"]
-                }
+                return {"verdict": "UNKNOWN", "confidence": "Low", "summary": "Could not parse Gemini response as JSON", "key_findings": ["Parsing error"], "risk_factors": [], "recommendations": ["Please try again"]}
         except json.JSONDecodeError:
-            return {
-                "verdict": "UNKNOWN",
-                "confidence": "Low",
-                "summary": "Invalid JSON in Gemini response",
-                "key_findings": ["JSON parsing error"],
-                "risk_factors": [],
-                "recommendations": ["Please try again"]
-            }
+            return {"verdict": "UNKNOWN", "confidence": "Low", "summary": "Invalid JSON in Gemini response", "key_findings": ["JSON parsing error"], "risk_factors": [], "recommendations": ["Please try again"]}
             
     except Exception as e:
         error_msg = str(e)
-        
-        # Provide helpful error messages for common issues
-        if "403" in error_msg or "permission" in error_msg.lower():
-            return {
-                "verdict": "UNKNOWN",
-                "confidence": "Low",
-                "summary": "Gemini API permission error. Please check your API key permissions.",
-                "key_findings": ["Permission denied"],
-                "risk_factors": [],
-                "recommendations": [
-                    "Verify your Gemini API key is correct",
-                    "Enable Gemini API in Google Cloud Console",
-                    "Check if billing is enabled for your project"
-                ]
-            }
-        elif "404" in error_msg or "not found" in error_msg.lower():
-            return {
-                "verdict": "UNKNOWN",
-                "confidence": "Low",
-                "summary": "Gemini model not available. Please check your API key and region.",
-                "key_findings": ["Model not found"],
-                "risk_factors": [],
-                "recommendations": [
-                    "Make sure Gemini API is enabled in your Google Cloud project",
-                    "Check if you're in a supported region",
-                    "Wait a few minutes and try again"
-                ]
-            }
-        elif "429" in error_msg or "quota" in error_msg.lower():
-            return {
-                "verdict": "UNKNOWN",
-                "confidence": "Low",
-                "summary": "Gemini API quota exceeded. Please try again later.",
-                "key_findings": ["Rate limit reached"],
-                "risk_factors": [],
-                "recommendations": [
-                    "Wait a few minutes before trying again",
-                    "Check your Gemini API usage in Google Cloud Console"
-                ]
-            }
-        else:
-            return {
-                "verdict": "UNKNOWN",
-                "confidence": "Low",
-                "summary": f"Gemini analysis failed: {error_msg[:200]}",
-                "key_findings": ["Analysis error"],
-                "risk_factors": [],
-                "recommendations": ["Please try again or check API configuration"]
-            }
+        return {
+            "verdict": "UNKNOWN",
+            "confidence": "Low",
+            "summary": f"Gemini analysis failed: {error_msg[:200]}",
+            "key_findings": ["Analysis error"],
+            "risk_factors": [],
+            "recommendations": ["Please try again or check API configuration"]
+        }
 
 
 # ============================================================================
@@ -586,6 +726,9 @@ def display_source_results(source_results: List[Dict[str, Any]]):
                 with st.expander(f"✅ {source_name}", expanded=False):
                     data = result.get("data", {})
                     st.json(data)
+            elif status == "skipped":
+                with st.expander(f"⏭️ {source_name}", expanded=False):
+                    st.info(result.get("error", "Source skipped for this target type."))
             else:
                 with st.expander(f"⚠️ {source_name} (Error)", expanded=False):
                     error_msg = result.get("error", "Unknown error")
@@ -668,6 +811,9 @@ def main():
                 "```toml\n"
                 "VIRUSTOTAL_API_KEY = \"your_key_here\"\n"
                 "GEMINI_API_KEY = \"your_key_here\"\n"
+                "ABUSEIPDB_API_KEY = \"your_key_here\"\n"
+                "GOOGLE_SAFE_BROWSING_API_KEY = \"your_key_here\"\n"
+                "URLSCAN_API_KEY = \"your_key_here\"\n"
                 "```\n"
                 "4. Click Save and redeploy your app")
         st.stop()
@@ -728,11 +874,16 @@ def main():
             source_results = []
             progress_bar = st.progress(0)
             
+            # Calculate total sources for progress bar
+            total_sources = len(SOURCES)
+            
             for idx, (source_name, source_func) in enumerate(SOURCES.items()):
-                progress_bar.progress((idx + 1) / len(SOURCES))
+                progress_bar.progress((idx + 1) / total_sources)
                 try:
                     result = source_func(target, internal_type)
                     source_results.append(result)
+                    # Add a slight delay to avoid hitting API rate limits
+                    time.sleep(1) 
                 except Exception as e:
                     source_results.append({
                         "source": source_name,
