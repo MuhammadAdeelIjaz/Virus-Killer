@@ -21,13 +21,18 @@ st.set_page_config(
     layout="centered"
 )
 
-# API key validation
+# API key validation - Updated for Streamlit Cloud
 def check_api_keys():
     """Check if required API keys are available in secrets."""
     missing_keys = []
-    if "VIRUSTOTAL_API_KEY" not in st.secrets:
+    
+    # For Streamlit Cloud, secrets are accessed via st.secrets
+    if not hasattr(st, 'secrets') or not st.secrets:
+        return ["STREAMLIT_SECRETS"]
+    
+    if "VIRUSTOTAL_API_KEY" not in st.secrets or not st.secrets["VIRUSTOTAL_API_KEY"]:
         missing_keys.append("VIRUSTOTAL_API_KEY")
-    if "GEMINI_API_KEY" not in st.secrets:
+    if "GEMINI_API_KEY" not in st.secrets or not st.secrets["GEMINI_API_KEY"]:
         missing_keys.append("GEMINI_API_KEY")
     return missing_keys
 
@@ -102,7 +107,7 @@ def get_virustotal(target: str, target_type: str) -> Dict[str, Any]:
             "source": "VirusTotal",
             "status": "error",
             "data": {},
-            "error": "VirusTotal API key not configured"
+            "error": "VirusTotal API key not configured in Streamlit Cloud secrets"
         }
     
     # Build the appropriate URL based on target type
@@ -453,22 +458,35 @@ def analyze_with_gemini(target: str, target_type: str, knowledge_level: str, sou
         return {
             "verdict": "UNKNOWN",
             "confidence": "Low",
-            "summary": "Gemini API key not configured",
+            "summary": "Gemini API key not configured in Streamlit Cloud secrets",
             "key_findings": ["API configuration error"],
             "risk_factors": [],
-            "recommendations": ["Please configure Gemini API key in secrets.toml"]
+            "recommendations": ["Please configure Gemini API key in Streamlit Cloud settings"]
         }
     
     try:
         # Configure Gemini
         genai.configure(api_key=api_key)
+        
+        # FIXED: Use the correct model name
+        # List of available models: gemini-1.5-pro, gemini-1.5-flash, gemini-1.0-pro, etc.
+        # Use gemini-1.5-pro for better quality or gemini-1.5-flash for faster responses
         model = genai.GenerativeModel("gemini-1.5-flash")
         
         # Build the prompt
         prompt = build_gemini_prompt(target, target_type, knowledge_level, source_results)
         
-        # Get response
-        response = model.generate_content(prompt)
+        # Get response with generation config
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                temperature=0.1,
+                top_p=0.95,
+                top_k=40,
+                max_output_tokens=8192,
+            )
+        )
+        
         response_text = response.text.strip()
         
         # Try to parse JSON
@@ -520,14 +538,30 @@ def analyze_with_gemini(target: str, target_type: str, knowledge_level: str, sou
             }
             
     except Exception as e:
-        return {
-            "verdict": "UNKNOWN",
-            "confidence": "Low",
-            "summary": f"Gemini analysis failed: {str(e)[:200]}",
-            "key_findings": ["Analysis error"],
-            "risk_factors": [],
-            "recommendations": ["Please try again or check API configuration"]
-        }
+        error_msg = str(e)
+        # Provide more helpful error messages
+        if "404" in error_msg or "not found" in error_msg:
+            return {
+                "verdict": "UNKNOWN",
+                "confidence": "Low",
+                "summary": "Gemini model not available. Please check your API key and model configuration.",
+                "key_findings": ["Model configuration error"],
+                "risk_factors": [],
+                "recommendations": [
+                    "Verify your Gemini API key is correct",
+                    "Try using 'gemini-1.5-pro' or 'gemini-1.0-pro' model",
+                    "Check if Gemini API is enabled in your Google Cloud project"
+                ]
+            }
+        else:
+            return {
+                "verdict": "UNKNOWN",
+                "confidence": "Low",
+                "summary": f"Gemini analysis failed: {error_msg[:200]}",
+                "key_findings": ["Analysis error"],
+                "risk_factors": [],
+                "recommendations": ["Please try again or check API configuration"]
+            }
 
 
 # ============================================================================
@@ -575,18 +609,27 @@ def display_verdict_card(verdict_result: Dict[str, Any]):
     
     color_icon = get_verdict_color(verdict)
     
-    # Determine CSS class for container
-    verdict_classes = {
-        "SAFE": "safe-verdict",
-        "SUSPICIOUS": "suspicious-verdict",
-        "MALICIOUS": "malicious-verdict",
-        "UNKNOWN": "unknown-verdict"
+    # Determine background color based on verdict
+    bg_colors = {
+        "SAFE": "#d4edda",
+        "SUSPICIOUS": "#fff3cd",
+        "MALICIOUS": "#f8d7da",
+        "UNKNOWN": "#e9ecef"
     }
+    bg_color = bg_colors.get(verdict, "#f8f9fa")
+    
+    border_colors = {
+        "SAFE": "#28a745",
+        "SUSPICIOUS": "#ffc107",
+        "MALICIOUS": "#dc3545",
+        "UNKNOWN": "#6c757d"
+    }
+    border_color = border_colors.get(verdict, "#6c757d")
     
     # Use HTML for better visual styling
     st.markdown(f"""
-    <div style="border: 2px solid; border-radius: 10px; padding: 20px; margin: 10px 0;
-                background-color: #f8f9fa;">
+    <div style="border: 3px solid {border_color}; border-radius: 10px; padding: 20px; margin: 10px 0;
+                background-color: {bg_color};">
         <h2 style="margin: 0;">{color_icon} {verdict}</h2>
         <p style="margin: 5px 0;"><strong>Confidence:</strong> {confidence}</p>
         <p style="margin: 10px 0;"><strong>Summary:</strong> {summary}</p>
@@ -624,7 +667,19 @@ def main():
     # Check for API keys
     missing_keys = check_api_keys()
     if missing_keys:
-        st.warning(f"⚠️ Missing API keys: {', '.join(missing_keys)}. Please add them to `.streamlit/secrets.toml`")
+        if "STREAMLIT_SECRETS" in missing_keys:
+            st.error("❌ Streamlit secrets not configured. Please set up secrets in Streamlit Cloud dashboard.")
+        else:
+            st.warning(f"⚠️ Missing API keys: {', '.join(missing_keys)}. Please add them to Streamlit Cloud secrets.")
+        st.info("📝 **How to fix:**\n\n"
+                "1. Go to your app on Streamlit Cloud\n"
+                "2. Click on Settings (⚙️)\n"
+                "3. In the Secrets section, add:\n\n"
+                "```toml\n"
+                "VIRUSTOTAL_API_KEY = \"your_key_here\"\n"
+                "GEMINI_API_KEY = \"your_key_here\"\n"
+                "```\n"
+                "4. Click Save and redeploy your app")
         st.stop()
     
     # Input form
