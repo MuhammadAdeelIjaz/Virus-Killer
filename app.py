@@ -21,12 +21,11 @@ st.set_page_config(
     layout="centered"
 )
 
-# API key validation - Updated for Streamlit Cloud
+# API key validation
 def check_api_keys():
     """Check if required API keys are available in secrets."""
     missing_keys = []
     
-    # For Streamlit Cloud, secrets are accessed via st.secrets
     if not hasattr(st, 'secrets') or not st.secrets:
         return ["STREAMLIT_SECRETS"]
     
@@ -64,8 +63,7 @@ def validate_url(url_str: str) -> bool:
             return False
         if parsed.scheme not in ['http', 'https']:
             return False
-        # Extract domain from URL for further validation
-        domain = parsed.netloc.split(':')[0]  # Remove port if present
+        domain = parsed.netloc.split(':')[0]
         return validate_domain(domain) or validate_ip(domain)
     except Exception:
         return False
@@ -79,38 +77,21 @@ def extract_domain_from_url(url_str: str) -> Optional[str]:
     except Exception:
         return None
 
-def determine_target_type(target: str) -> str:
-    """Determine the type of target (IP, Domain, URL)."""
-    target = target.strip()
-    
-    if validate_ip(target):
-        return "IP"
-    elif validate_url(target):
-        return "URL"
-    elif validate_domain(target):
-        return "Domain"
-    else:
-        return "Invalid"
-
 # ============================================================================
 # 3. Source Functions
 # ============================================================================
 
 def get_virustotal(target: str, target_type: str) -> Dict[str, Any]:
-    """
-    Query VirusTotal API for target intelligence.
-    """
-    # Get API key from secrets
+    """Query VirusTotal API for target intelligence."""
     api_key = st.secrets.get("VIRUSTOTAL_API_KEY")
     if not api_key:
         return {
             "source": "VirusTotal",
             "status": "error",
             "data": {},
-            "error": "VirusTotal API key not configured in Streamlit Cloud secrets"
+            "error": "VirusTotal API key not configured"
         }
     
-    # Build the appropriate URL based on target type
     base_url = "https://www.virustotal.com/api/v3"
     endpoint = ""
     encoded_target = target.strip()
@@ -120,8 +101,6 @@ def get_virustotal(target: str, target_type: str) -> Dict[str, Any]:
     elif target_type == "Domain":
         endpoint = f"/domains/{encoded_target}"
     elif target_type == "URL":
-        # For URLs, we need to use the URL ID format
-        # URL ID is base64 encoded of the URL
         import base64
         url_bytes = encoded_target.encode('utf-8')
         url_id = base64.urlsafe_b64encode(url_bytes).decode('utf-8').rstrip('=')
@@ -161,12 +140,10 @@ def get_virustotal(target: str, target_type: str) -> Dict[str, Any]:
                 "source": "VirusTotal",
                 "status": "error",
                 "data": {},
-                "error": f"HTTP Error {response.status_code}: {response.text[:200]}"
+                "error": f"HTTP Error {response.status_code}"
             }
         
         data = response.json()
-        
-        # Extract relevant information
         result = {
             "source": "VirusTotal",
             "status": "success",
@@ -177,7 +154,6 @@ def get_virustotal(target: str, target_type: str) -> Dict[str, Any]:
         if "data" in data:
             attributes = data["data"].get("attributes", {})
             
-            # Extract statistical data
             stats = attributes.get("last_analysis_stats", {})
             result["data"]["stats"] = {
                 "malicious": stats.get("malicious", 0),
@@ -187,31 +163,24 @@ def get_virustotal(target: str, target_type: str) -> Dict[str, Any]:
                 "timeout": stats.get("timeout", 0)
             }
             
-            # Extract reputation
             result["data"]["reputation"] = attributes.get("reputation", 0)
             
-            # Extract additional information based on type
             if target_type == "IP":
                 result["data"]["country"] = attributes.get("country", None)
                 result["data"]["as_owner"] = attributes.get("as_owner", None)
                 result["data"]["asn"] = attributes.get("asn", None)
-                
-                # Network information
                 network = attributes.get("network", None)
                 if network:
                     result["data"]["network"] = network
-            
             elif target_type == "Domain":
                 result["data"]["categories"] = attributes.get("categories", {})
                 result["data"]["creation_date"] = attributes.get("creation_date", None)
                 result["data"]["last_update_date"] = attributes.get("last_update_date", None)
-            
             elif target_type == "URL":
                 result["data"]["url"] = attributes.get("url", None)
                 result["data"]["categories"] = attributes.get("categories", {})
                 result["data"]["last_analysis_date"] = attributes.get("last_analysis_date", None)
             
-            # Get vendor detections (top 5 for readability)
             results = attributes.get("last_analysis_results", {})
             vendor_detections = []
             for vendor, detection in results.items():
@@ -221,8 +190,7 @@ def get_virustotal(target: str, target_type: str) -> Dict[str, Any]:
                         "category": detection.get("category"),
                         "result": detection.get("result", "Unknown")
                     })
-            result["data"]["vendor_detections"] = vendor_detections[:10]  # Limit to 10
-            
+            result["data"]["vendor_detections"] = vendor_detections[:10]
         else:
             result["status"] = "error"
             result["error"] = "Unexpected API response format"
@@ -234,14 +202,14 @@ def get_virustotal(target: str, target_type: str) -> Dict[str, Any]:
             "source": "VirusTotal",
             "status": "error",
             "data": {},
-            "error": "Request timed out. Please try again."
+            "error": "Request timed out"
         }
     except requests.exceptions.ConnectionError:
         return {
             "source": "VirusTotal",
             "status": "error",
             "data": {},
-            "error": "Connection error. Please check your internet connection."
+            "error": "Connection error"
         }
     except json.JSONDecodeError:
         return {
@@ -260,11 +228,8 @@ def get_virustotal(target: str, target_type: str) -> Dict[str, Any]:
 
 
 def get_whois(target: str, target_type: str) -> Dict[str, Any]:
-    """
-    Query WHOIS information for the target.
-    """
+    """Query WHOIS information for the target."""
     try:
-        # Determine what to query based on target type
         if target_type == "URL":
             domain = extract_domain_from_url(target)
             if not domain:
@@ -275,17 +240,13 @@ def get_whois(target: str, target_type: str) -> Dict[str, Any]:
                     "error": "Could not extract domain from URL"
                 }
         elif target_type == "IP":
-            # Some WHOIS lookups work for IPs, but many don't
-            # We'll try but handle gracefully if it fails
             domain = target
         else:
             domain = target.strip()
         
-        # Perform WHOIS lookup with timeout
         try:
             w = whois.whois(domain, timeout=10)
         except whois.parser.PywhoisError as e:
-            # This is common when WHOIS is unavailable
             return {
                 "source": "WHOIS",
                 "status": "error",
@@ -293,16 +254,14 @@ def get_whois(target: str, target_type: str) -> Dict[str, Any]:
                 "error": f"WHOIS lookup failed: {str(e)[:200]}"
             }
         
-        # Check if we got valid data
         if not w or not w.domain_name:
             return {
                 "source": "WHOIS",
                 "status": "error",
                 "data": {},
-                "error": "No WHOIS data available for this target"
+                "error": "No WHOIS data available"
             }
         
-        # Build normalized WHOIS result
         result = {
             "source": "WHOIS",
             "status": "success",
@@ -310,14 +269,12 @@ def get_whois(target: str, target_type: str) -> Dict[str, Any]:
             "error": None
         }
         
-        # Extract data with proper handling for different formats
         result["data"]["domain_name"] = str(w.domain_name) if w.domain_name else "N/A"
         result["data"]["registrar"] = str(w.registrar) if w.registrar else "N/A"
         result["data"]["creation_date"] = str(w.creation_date) if w.creation_date else "N/A"
         result["data"]["expiration_date"] = str(w.expiration_date) if w.expiration_date else "N/A"
         result["data"]["updated_date"] = str(w.updated_date) if w.updated_date else "N/A"
         
-        # Handle name servers (could be string or list)
         if w.name_servers:
             if isinstance(w.name_servers, list):
                 result["data"]["name_servers"] = [str(ns) for ns in w.name_servers]
@@ -329,7 +286,6 @@ def get_whois(target: str, target_type: str) -> Dict[str, Any]:
         result["data"]["org"] = str(w.org) if w.org else "N/A"
         result["data"]["country"] = str(w.country) if w.country else "N/A"
         
-        # Handle status (could be string or list)
         if w.status:
             if isinstance(w.status, list):
                 result["data"]["status"] = [str(s) for s in w.status]
@@ -338,7 +294,6 @@ def get_whois(target: str, target_type: str) -> Dict[str, Any]:
         else:
             result["data"]["status"] = []
         
-        # Handle emails
         if w.emails:
             if isinstance(w.emails, list):
                 result["data"]["emails"] = [str(e) for e in w.emails]
@@ -347,7 +302,6 @@ def get_whois(target: str, target_type: str) -> Dict[str, Any]:
         else:
             result["data"]["emails"] = []
         
-        # Additional fields
         result["data"]["dnssec"] = str(w.dnssec) if w.dnssec else "N/A"
         
         return result
@@ -371,16 +325,13 @@ SOURCES = {
 }
 
 # ============================================================================
-# 5. Gemini Analysis
+# 5. Gemini Analysis - COMPLETELY REWRITTEN
 # ============================================================================
 
 def build_gemini_prompt(target: str, target_type: str, knowledge_level: str, source_results: List[Dict[str, Any]]) -> str:
     """Build a level-specific prompt for Gemini."""
-    
-    # Prepare source data for the prompt
     source_data_str = json.dumps(source_results, indent=2)
     
-    # Base instruction
     base_instruction = """
     You are a security intelligence analyst. Analyze the provided security data and provide a clear assessment.
     Use ONLY the data provided. Never invent information.
@@ -397,7 +348,6 @@ def build_gemini_prompt(target: str, target_type: str, knowledge_level: str, sou
     }
     """
     
-    # Level-specific instructions
     if knowledge_level == "Beginner":
         prompt = f"""
         {base_instruction}
@@ -426,7 +376,7 @@ def build_gemini_prompt(target: str, target_type: str, knowledge_level: str, sou
         
         Provide a practical risk assessment with recommendations.
         """
-    else:  # Expert
+    else:
         prompt = f"""
         {base_instruction}
         
@@ -458,7 +408,7 @@ def analyze_with_gemini(target: str, target_type: str, knowledge_level: str, sou
         return {
             "verdict": "UNKNOWN",
             "confidence": "Low",
-            "summary": "Gemini API key not configured in Streamlit Cloud secrets",
+            "summary": "Gemini API key not configured",
             "key_findings": ["API configuration error"],
             "risk_factors": [],
             "recommendations": ["Please configure Gemini API key in Streamlit Cloud settings"]
@@ -468,89 +418,153 @@ def analyze_with_gemini(target: str, target_type: str, knowledge_level: str, sou
         # Configure Gemini
         genai.configure(api_key=api_key)
         
-        # FIXED: Use the correct model name
-        # List of available models: gemini-1.5-pro, gemini-1.5-flash, gemini-1.0-pro, etc.
-        # Use gemini-1.5-pro for better quality or gemini-1.5-flash for faster responses
-        model = genai.GenerativeModel("gemini-pro")
+        # Try different model names - start with the most stable
+        # For older API versions, use "gemini-pro" or "models/gemini-pro"
+        model_names_to_try = [
+            "gemini-pro",
+            "models/gemini-pro",
+            "gemini-1.0-pro",
+            "models/gemini-1.0-pro",
+            "gemini-1.5-pro",
+            "models/gemini-1.5-pro",
+        ]
+        
+        model = None
+        last_error = None
+        
+        for model_name in model_names_to_try:
+            try:
+                model = genai.GenerativeModel(model_name)
+                # Test if model works with a simple prompt
+                test_response = model.generate_content("Hello")
+                if test_response and test_response.text:
+                    # Model works, break the loop
+                    break
+            except Exception as e:
+                last_error = str(e)
+                continue
+        
+        if model is None:
+            # If none of the models worked, try the simplest approach
+            try:
+                # Some versions require the 'models/' prefix
+                model = genai.GenerativeModel("models/gemini-pro")
+            except Exception as e:
+                return {
+                    "verdict": "UNKNOWN",
+                    "confidence": "Low",
+                    "summary": f"Could not initialize any Gemini model. Last error: {str(last_error)[:200]}",
+                    "key_findings": ["Model initialization failed"],
+                    "risk_factors": [],
+                    "recommendations": [
+                        "Check your Gemini API key is valid",
+                        "Enable Gemini API in Google Cloud Console",
+                        "Wait a few minutes and try again"
+                    ]
+                }
         
         # Build the prompt
         prompt = build_gemini_prompt(target, target_type, knowledge_level, source_results)
         
-        # Get response with generation config
-        response = model.generate_content(
-            prompt,
-            generation_config=genai.types.GenerationConfig(
-                temperature=0.1,
-                top_p=0.95,
-                top_k=40,
-                max_output_tokens=8192,
+        # Generate response with proper configuration
+        try:
+            # Try with generation config
+            response = model.generate_content(
+                prompt,
+                generation_config={
+                    "temperature": 0.1,
+                    "top_p": 0.95,
+                    "top_k": 40,
+                    "max_output_tokens": 8192,
+                }
             )
-        )
+        except TypeError:
+            # If generation_config doesn't work as dict, try without it
+            response = model.generate_content(prompt)
+        except Exception as e:
+            # Fallback to simple generation
+            response = model.generate_content(prompt)
         
         response_text = response.text.strip()
         
-        # Try to parse JSON
+        # Try to parse JSON from response
         try:
-            # Look for JSON in the response
             json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
             if json_match:
                 json_str = json_match.group()
                 result = json.loads(json_str)
                 
                 # Ensure all required fields exist
-                if "verdict" not in result:
-                    result["verdict"] = "UNKNOWN"
-                if "confidence" not in result:
-                    result["confidence"] = "Medium"
-                if "summary" not in result:
-                    result["summary"] = "Analysis completed but no summary provided"
-                if "key_findings" not in result:
-                    result["key_findings"] = []
-                if "risk_factors" not in result:
-                    result["risk_factors"] = []
-                if "recommendations" not in result:
-                    result["recommendations"] = []
+                result.setdefault("verdict", "UNKNOWN")
+                result.setdefault("confidence", "Medium")
+                result.setdefault("summary", "Analysis completed")
+                result.setdefault("key_findings", [])
+                result.setdefault("risk_factors", [])
+                result.setdefault("recommendations", [])
                 
-                # Ensure verdict is one of the allowed values
                 if result["verdict"] not in ["SAFE", "SUSPICIOUS", "MALICIOUS", "UNKNOWN"]:
                     result["verdict"] = "UNKNOWN"
                 
                 return result
             else:
-                # Fallback if no JSON found
                 return {
                     "verdict": "UNKNOWN",
                     "confidence": "Low",
-                    "summary": response_text[:500],
-                    "key_findings": ["Unable to parse Gemini response"],
+                    "summary": "Could not parse Gemini response as JSON",
+                    "key_findings": ["Parsing error"],
                     "risk_factors": [],
-                    "recommendations": ["Please try again or check API status"]
+                    "recommendations": ["Please try again"]
                 }
-                
         except json.JSONDecodeError:
             return {
                 "verdict": "UNKNOWN",
                 "confidence": "Low",
-                "summary": "Unable to parse Gemini response as JSON",
-                "key_findings": ["Response parsing error"],
+                "summary": "Invalid JSON in Gemini response",
+                "key_findings": ["JSON parsing error"],
                 "risk_factors": [],
-                "recommendations": ["Please try again or check API status"]
+                "recommendations": ["Please try again"]
             }
             
     except Exception as e:
         error_msg = str(e)
-        # Provide more helpful error messages
-        if "404" in error_msg or "not found" in error_msg:
+        
+        # Provide helpful error messages for common issues
+        if "403" in error_msg or "permission" in error_msg.lower():
             return {
                 "verdict": "UNKNOWN",
                 "confidence": "Low",
-                "summary": "Gemini model not available. Please check your API key and model configuration.",
-                "key_findings": ["Model configuration error"],
+                "summary": "Gemini API permission error. Please check your API key permissions.",
+                "key_findings": ["Permission denied"],
                 "risk_factors": [],
                 "recommendations": [
                     "Verify your Gemini API key is correct",
-                    "Try using 'gemini-1.5-pro' or 'gemini-1.0-pro' model",
-                    "Check if Gemini API is enabled in your Google Cloud project"
+                    "Enable Gemini API in Google Cloud Console",
+                    "Check if billing is enabled for your project"
+                ]
+            }
+        elif "404" in error_msg or "not found" in error_msg.lower():
+            return {
+                "verdict": "UNKNOWN",
+                "confidence": "Low",
+                "summary": "Gemini model not available. Please check your API key and region.",
+                "key_findings": ["Model not found"],
+                "risk_factors": [],
+                "recommendations": [
+                    "Make sure Gemini API is enabled in your Google Cloud project",
+                    "Check if you're in a supported region",
+                    "Wait a few minutes and try again"
+                ]
+            }
+        elif "429" in error_msg or "quota" in error_msg.lower():
+            return {
+                "verdict": "UNKNOWN",
+                "confidence": "Low",
+                "summary": "Gemini API quota exceeded. Please try again later.",
+                "key_findings": ["Rate limit reached"],
+                "risk_factors": [],
+                "recommendations": [
+                    "Wait a few minutes before trying again",
+                    "Check your Gemini API usage in Google Cloud Console"
                 ]
             }
         else:
@@ -581,7 +595,6 @@ def get_verdict_color(verdict: str) -> str:
 
 def display_source_results(source_results: List[Dict[str, Any]]):
     """Display source results in expandable sections."""
-    
     with st.expander("🔍 Source Intelligence", expanded=False):
         for result in source_results:
             source_name = result.get("source", "Unknown Source")
@@ -590,7 +603,6 @@ def display_source_results(source_results: List[Dict[str, Any]]):
             if status == "success":
                 with st.expander(f"✅ {source_name}", expanded=False):
                     data = result.get("data", {})
-                    # Display the data in a readable format
                     st.json(data)
             else:
                 with st.expander(f"⚠️ {source_name} (Error)", expanded=False):
@@ -609,7 +621,6 @@ def display_verdict_card(verdict_result: Dict[str, Any]):
     
     color_icon = get_verdict_color(verdict)
     
-    # Determine background color based on verdict
     bg_colors = {
         "SAFE": "#d4edda",
         "SUSPICIOUS": "#fff3cd",
@@ -626,7 +637,6 @@ def display_verdict_card(verdict_result: Dict[str, Any]):
     }
     border_color = border_colors.get(verdict, "#6c757d")
     
-    # Use HTML for better visual styling
     st.markdown(f"""
     <div style="border: 3px solid {border_color}; border-radius: 10px; padding: 20px; margin: 10px 0;
                 background-color: {bg_color};">
@@ -636,7 +646,6 @@ def display_verdict_card(verdict_result: Dict[str, Any]):
     </div>
     """, unsafe_allow_html=True)
     
-    # Display findings, risk factors, and recommendations
     if key_findings:
         st.markdown("### 📋 Key Findings")
         for finding in key_findings:
@@ -660,7 +669,6 @@ def display_verdict_card(verdict_result: Dict[str, Any]):
 def main():
     """Main application entry point."""
     
-    # Title and description
     st.markdown("# 🛡️ ThreatLens")
     st.markdown("*IP, Domain & URL Security Intelligence Analyzer*")
     
@@ -670,7 +678,7 @@ def main():
         if "STREAMLIT_SECRETS" in missing_keys:
             st.error("❌ Streamlit secrets not configured. Please set up secrets in Streamlit Cloud dashboard.")
         else:
-            st.warning(f"⚠️ Missing API keys: {', '.join(missing_keys)}. Please add them to Streamlit Cloud secrets.")
+            st.warning(f"⚠️ Missing API keys: {', '.join(missing_keys)}")
         st.info("📝 **How to fix:**\n\n"
                 "1. Go to your app on Streamlit Cloud\n"
                 "2. Click on Settings (⚙️)\n"
@@ -697,10 +705,9 @@ def main():
             knowledge_level = st.selectbox(
                 "Knowledge Level",
                 options=["Beginner", "Intermediate", "Expert"],
-                help="Select your technical level for response detail"
+                help="Select your technical level"
             )
         
-        # Map selectbox values to internal types
         type_mapping = {
             "Domain": "Domain",
             "IP Address": "IP",
@@ -716,7 +723,6 @@ def main():
         
         analyze_button = st.form_submit_button("🔍 Analyze", use_container_width=True)
         
-    # Validation and analysis
     if analyze_button:
         if not target:
             st.error("Please enter a target to analyze")
@@ -725,7 +731,6 @@ def main():
         target = target.strip()
         is_valid = False
         
-        # Validate based on selected type
         if internal_type == "IP":
             is_valid = validate_ip(target)
         elif internal_type == "Domain":
@@ -737,16 +742,12 @@ def main():
             st.error(f"Invalid {internal_type} format. Please check your input.")
             return
         
-        # Show progress
         with st.spinner(f"Analyzing {target}..."):
-            # Query all sources
             source_results = []
             progress_bar = st.progress(0)
             
             for idx, (source_name, source_func) in enumerate(SOURCES.items()):
-                # Update progress
                 progress_bar.progress((idx + 1) / len(SOURCES))
-                
                 try:
                     result = source_func(target, internal_type)
                     source_results.append(result)
@@ -755,18 +756,16 @@ def main():
                         "source": source_name,
                         "status": "error",
                         "data": {},
-                        "error": f"Unexpected error in {source_name}: {str(e)}"
+                        "error": f"Unexpected error: {str(e)}"
                     })
             
             progress_bar.empty()
             
-            # Analyze with Gemini
             with st.spinner("Generating AI assessment..."):
                 gemini_result = analyze_with_gemini(
                     target, internal_type, knowledge_level, source_results
                 )
             
-            # Display results
             col_left, col_right = st.columns([3, 1])
             with col_left:
                 display_verdict_card(gemini_result)
@@ -776,10 +775,8 @@ def main():
                 st.metric("Type", target_type)
                 st.metric("Level", knowledge_level)
             
-            # Display source results
             display_source_results(source_results)
             
-            # Display raw data in an expander
             with st.expander("📊 Raw Data", expanded=False):
                 st.json({
                     "target": target,
