@@ -325,7 +325,7 @@ SOURCES = {
 }
 
 # ============================================================================
-# 5. Gemini Analysis - COMPLETELY REWRITTEN
+# 5. Gemini Analysis - UPDATED FOR GEMINI 3.6
 # ============================================================================
 
 def build_gemini_prompt(target: str, target_type: str, knowledge_level: str, source_results: List[Dict[str, Any]]) -> str:
@@ -418,50 +418,32 @@ def analyze_with_gemini(target: str, target_type: str, knowledge_level: str, sou
         # Configure Gemini
         genai.configure(api_key=api_key)
         
-        # Try different model names - start with the most stable
-        # For older API versions, use "gemini-pro" or "models/gemini-pro"
-        model_names_to_try = [
-            "gemini-pro",
-            "models/gemini-pro",
-            "gemini-1.0-pro",
-            "models/gemini-1.0-pro",
-            "gemini-1.5-pro",
-            "models/gemini-1.5-pro",
-        ]
+        # Directly use the working model confirmed via terminal
+        model_name = "gemini-3.6-flash"
         
-        model = None
-        last_error = None
-        
-        for model_name in model_names_to_try:
-            try:
-                model = genai.GenerativeModel(model_name)
-                # Test if model works with a simple prompt
-                test_response = model.generate_content("Hello")
-                if test_response and test_response.text:
-                    # Model works, break the loop
-                    break
-            except Exception as e:
-                last_error = str(e)
-                continue
-        
-        if model is None:
-            # If none of the models worked, try the simplest approach
-            try:
-                # Some versions require the 'models/' prefix
-                model = genai.GenerativeModel("models/gemini-pro")
-            except Exception as e:
-                return {
-                    "verdict": "UNKNOWN",
-                    "confidence": "Low",
-                    "summary": f"Could not initialize any Gemini model. Last error: {str(last_error)[:200]}",
-                    "key_findings": ["Model initialization failed"],
-                    "risk_factors": [],
-                    "recommendations": [
-                        "Check your Gemini API key is valid",
-                        "Enable Gemini API in Google Cloud Console",
-                        "Wait a few minutes and try again"
-                    ]
-                }
+        try:
+            # Try initializing the model directly
+            model = genai.GenerativeModel(model_name)
+            
+            # Optionally, test if it works immediately
+            # test_response = model.generate_content("Hello")
+            # if not test_response or not test_response.text:
+            #     raise Exception("Model returned empty response")
+            
+        except Exception as e:
+            # Fallback error message if model initialization fails
+            return {
+                "verdict": "UNKNOWN",
+                "confidence": "Low",
+                "summary": f"Could not initialize Gemini model {model_name}. Error: {str(e)[:200]}",
+                "key_findings": ["Model initialization failed"],
+                "risk_factors": [],
+                "recommendations": [
+                    "Check your Gemini API key is valid",
+                    "Ensure Gemini 3.6 Flash is available in your region",
+                    "Try again in a few minutes"
+                ]
+            }
         
         # Build the prompt
         prompt = build_gemini_prompt(target, target_type, knowledge_level, source_results)
