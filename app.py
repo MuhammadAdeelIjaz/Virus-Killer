@@ -471,7 +471,7 @@ def analyze_with_gemini(target: str, target_type: str, knowledge_level: str, sou
         # FIXED: Use the correct model name
         # List of available models: gemini-1.5-pro, gemini-1.5-flash, gemini-1.0-pro, etc.
         # Use gemini-1.5-pro for better quality or gemini-1.5-flash for faster responses
-        model = genai.GenerativeModel("gemini-1.0-pro")
+        model = genai.GenerativeModel("gemini-pro")
         
         # Build the prompt
         prompt = build_gemini_prompt(target, target_type, knowledge_level, source_results)
